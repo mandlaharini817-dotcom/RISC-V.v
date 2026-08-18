@@ -1,0 +1,243 @@
+module risc_v_processor (
+    input wire clk,
+    input wire reset
+);
+
+    // =========================
+    // Program Counter
+    // =========================
+    reg [31:0] pc;
+
+    // =========================
+    // Instruction Memory
+    // =========================
+    reg [31:0] instruction_memory [0:255];
+
+    // =========================
+    // Data Memory
+    // =========================
+    reg [31:0] data_memory [0:255];
+
+    // =========================
+    // Register File
+    // =========================
+    reg [31:0] registers [0:31];
+
+    // Instruction fields
+    wire [31:0] instruction;
+
+    assign instruction = instruction_memory[pc[9:2]];
+
+    wire [6:0] opcode;
+    wire [4:0] rd;
+    wire [2:0] funct3;
+    wire [4:0] rs1;
+    wire [4:0] rs2;
+    wire [6:0] funct7;
+
+    assign opcode = instruction[6:0];
+    assign rd     = instruction[11:7];
+    assign funct3 = instruction[14:12];
+    assign rs1    = instruction[19:15];
+    assign rs2    = instruction[24:20];
+    assign funct7 = instruction[31:25];
+
+    // =========================
+    // Immediate Generation
+    // =========================
+
+    wire signed [31:0] imm_i;
+    wire signed [31:0] imm_s;
+    wire signed [31:0] imm_b;
+
+    assign imm_i = {{20{instruction[31]}},
+                    instruction[31:20]};
+
+    assign imm_s = {{20{instruction[31]}},
+                    instruction[31:25],
+                    instruction[11:7]};
+
+    assign imm_b = {{19{instruction[31]}},
+                    instruction[31],
+                    instruction[7],
+                    instruction[30:25],
+                    instruction[11:8],
+                    1'b0};
+
+    // =========================
+    // ALU
+    // =========================
+
+    reg [31:0] alu_result;
+    reg [31:0] reg_data1;
+    reg [31:0] reg_data2;
+
+    always @(*) begin
+
+        reg_data1 = registers[rs1];
+        reg_data2 = registers[rs2];
+
+        alu_result = 32'd0;
+
+        case (opcode)
+
+            // R-Type Instructions
+            7'b0110011: begin
+
+                case (funct3)
+
+                    // ADD / SUB
+                    3'b000: begin
+                        if (funct7 == 7'b0000000)
+                            alu_result = reg_data1 + reg_data2;
+
+                        else if (funct7 == 7'b0100000)
+                            alu_result = reg_data1 - reg_data2;
+                    end
+
+                    // AND
+                    3'b111:
+                        alu_result = reg_data1 & reg_data2;
+
+                    // OR
+                    3'b110:
+                        alu_result = reg_data1 | reg_data2;
+
+                    default:
+                        alu_result = 32'd0;
+
+                endcase
+            end
+
+            // ADDI
+            7'b0010011: begin
+
+                if (funct3 == 3'b000)
+                    alu_result = reg_data1 + imm_i;
+
+            end
+
+            // Load / Store Address Calculation
+            7'b0000011,
+            7'b0100011: begin
+
+                if (opcode == 7'b0000011)
+                    alu_result = reg_data1 + imm_i;
+
+                else
+                    alu_result = reg_data1 + imm_s;
+
+            end
+
+            default:
+                alu_result = 32'd0;
+
+        endcase
+
+    end
+
+
+    // =========================
+    // Main Processor
+    // =========================
+
+    integer i;
+
+    always @(posedge clk or posedge reset) begin
+
+        if (reset) begin
+
+            pc <= 32'd0;
+
+            // Reset all registers
+            for (i = 0; i < 32; i = i + 1)
+                registers[i] <= 32'd0;
+
+        end
+
+        else begin
+
+            // Default PC increment
+            pc <= pc + 4;
+
+            case (opcode)
+
+                // -----------------
+                // R-Type
+                // ADD, SUB, AND, OR
+                // -----------------
+                7'b0110011: begin
+
+                    if (rd != 0)
+                        registers[rd] <= alu_result;
+
+                end
+
+
+                // -----------------
+                // I-Type
+                // ADDI
+                // -----------------
+                7'b0010011: begin
+
+                    if (rd != 0)
+                        registers[rd] <= alu_result;
+
+                end
+
+
+                // -----------------
+                // LW
+                // -----------------
+                7'b0000011: begin
+
+                    if (funct3 == 3'b010) begin
+
+                        if (rd != 0)
+                            registers[rd]
+                                <= data_memory[alu_result[9:2]];
+
+                    end
+
+                end
+
+
+                // -----------------
+                // SW
+                // -----------------
+                7'b0100011: begin
+
+                    if (funct3 == 3'b010) begin
+
+                        data_memory[alu_result[9:2]]
+                            <= registers[rs2];
+
+                    end
+
+                end
+
+
+                // -----------------
+                // BEQ
+                // -----------------
+                7'b1100011: begin
+
+                    if (funct3 == 3'b000) begin
+
+                        if (registers[rs1] == registers[rs2])
+                            pc <= pc + imm_b;
+
+                    end
+
+                end
+
+            endcase
+
+            // Register x0 is always zero
+            registers[0] <= 32'd0;
+
+        end
+
+    end
+
+endmodule
